@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class EntryIn(BaseModel):
@@ -26,6 +26,49 @@ class ClinicianOut(BaseModel):
     id: int
     name: str
     practice: str
+
+
+class ShareIn(BaseModel):
+    """Request body for ``POST /shares``."""
+
+    clinician_id: int
+    from_date: date
+    to_date: date
+    include_notes: bool = False
+
+    @model_validator(mode="after")
+    def check_date_range(self) -> "ShareIn":
+        """Rejects an inverted range with a 422 instead of a DB CheckConstraint/500.
+
+        Raises:
+            ValueError: If ``to_date`` is before ``from_date``.
+        """
+        if self.to_date < self.from_date:
+            raise ValueError("to_date must not be before from_date")
+        return self
+
+
+class ShareOut(BaseModel):
+    """Response body for ``POST /shares``, ``GET /shares`` and the revoke endpoint."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    clinician_id: int
+    from_date: date
+    to_date: date
+    include_notes: bool
+    created_at: datetime
+    revoked_at: datetime | None
+
+
+class AccessLogOut(BaseModel):
+    """Response body for ``GET /access-log``."""
+
+    clinician_id: int
+    clinician_name: str
+    accessed_at: datetime
+    entry_ids: list[int]
 
 
 class TelemetryEvent(BaseModel):

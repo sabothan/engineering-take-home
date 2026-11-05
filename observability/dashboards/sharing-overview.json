@@ -1,0 +1,114 @@
+{
+  "uid": "sharing-overview",
+  "title": "Sharing overview",
+  "schemaVersion": 41,
+  "refresh": "10s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "tags": [
+    "sharing"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Diary access-log write failures (doctor blocked from reading)",
+      "description": "Every increment means O.Log_1 couldn't be satisfied, so the clinician read failed closed (503). Page on any increase.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(access_log_write_failures_total[5m]))",
+          "legendFormat": "write failures"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Clinician diary reads by status",
+      "description": "GET /clinician/patients/{patient_id}/entries by status code. 200 covers both successful reads and the no-valid-share case (by design, these are indistinguishable). Sustained 5xx needs attention.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (status) (rate(http_requests_total{route=\"/clinician/patients/{patient_id}/entries\"}[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Shares created per hour",
+      "description": "Adoption signal: how many patients are starting a share. Doesn't track distinct patients (no patient IDs in metric labels) — see NOTES.md for the per-patient retention analysis, which isn't a live metric.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(http_requests_total{route=\"/shares\", method=\"POST\", status=\"201\"}[1h]))",
+          "legendFormat": "shares created"
+        }
+      ]
+    }
+  ]
+}
