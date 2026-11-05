@@ -118,27 +118,91 @@ Time spent: **TODO**
 
 | ID | Applies? | Where it is met (code, test), or why not |
 | --- | --- | --- |
-| O.Purp_1 | | |
+| O.Purp_1 | Yes | Applies to the app's share-creation screen (show recipient, data categories, period before the patient confirms) — not yet built. Backend has nothing to show here; will be met when `app/` adds the sharing screen. |
 | O.Cons_1 | Yes | A share only grants access while `revoked_at IS NULL`, and scopes exactly what was consented to (clinician, date range, `include_notes`). Enforced live on every read: `GET /clinician/patients/{id}/entries` queries `revoked_at IS NULL` directly, no caching. |
 | O.Cons_2 | Yes | Revoking sets `revoked_at` immediately (`POST /shares/{id}/revoke`); there's no caching of share validity, so every subsequent access check reads current DB state — a withdrawal takes effect for every access from that point on. |
 | O.Cons_3 | Yes | `shares.consent_version` (internal, not in the API response) records the consent wording version at creation time. See "Data model decisions". |
 | O.Auth_1 | Yes | Not met. The auth stub (`backend/app/auth.py`) is `Bearer <role>-<id>` with no session or login timestamp at all, so there is no "last authenticated" moment to check against 15 minutes. Implementing real re-auth would mean building a session/login system that's explicitly out of scope ("real authentication is out of scope", `auth.py`). |
-| O.Pass_1 | | |
+| O.Pass_1 | No | Doesn't apply: this system has no passwords anywhere. Auth is a stub (`Bearer <role>-<id>`), explicitly out of scope ("real authentication is out of scope", `auth.py`); there's no login/credential flow for a password policy to govern. |
 | O.Log_1 | Yes | `GET /clinician/patients/{id}/entries` writes an `access_logs` row (accessing clinician, entries actually returned, time) on every successful read where a valid share existed, including zero-entry reads. See `test_clinician_access.py`. |
 | O.Log_2 | Yes | `GET /access-log`, scoped to the authenticated patient. See `test_clinician_access.py::test_access_log_records_clinician_access_with_entry_ids`. |
 | O.Log_3 | Yes | App-level only: no code path updates/deletes `access_logs` rows. No DB-level enforcement (no `REVOKE`, no trigger) — see "Data model decisions" for why. |
 | O.Log_4 | Yes | Was violated: request-logging middleware (`backend/app/main.py`, `log_requests`) logged the full request body, leaking `mood`/`symptoms`/`note`. Fixed by removing the body read and the `body=%s` log field. |
-| O.Mon_1 | Yes | `access_log_write_failures_total` counter increments and the request fails closed (`503`) if the `AccessLog` insert fails. See "Data model decisions" and `test_fails_closed_when_access_log_write_fails`. Wiring this counter into an actual alert (e.g. a Grafana/Datadog rule) is part of the monitoring step, not yet done. |
-| O.Err_1 | | |
-| O.Cryp_1 | | |
-| O.Del_1 | | |
-| O.Doc_1 | | |
+| O.Mon_1 | Yes | `access_log_write_failures_total` counter increments and the request fails closed (`503`) if the `AccessLog` insert fails; graphed on the "Sharing overview" Grafana dashboard. See "Data model decisions", `test_fails_closed_when_access_log_write_fails`, and "Monitoring" below. |
+| O.Err_1 | Yes | FastAPI runs with `debug=False` (the default; never set otherwise), so unhandled exceptions get Starlette's generic 500 body, not a traceback/SQL/file path. Regression-tested in `test_error_handling.py::test_unhandled_error_does_not_leak_internals` by forcing an unexpected `RuntimeError` inside an endpoint and asserting the response body contains none of it. |
+| O.Cryp_1 | Yes | Not met in this dev setup. In production this is normally satisfied at the managed-disk/DB layer (e.g. the cloud provider's encrypted volumes for the Postgres instance), which is an infra/deployment concern outside this repo's local `docker-compose.yml` (plain `postgres:16-alpine`, no encryption configured) and outside the application code. See "Erasure" below for a related note on column-level alternatives I considered and didn't build. |
+| O.Del_1 | Yes | Stretch goal, not built. See "Erasure" below for how I would do it. |
+| O.Doc_1 | Yes | Met by this table: every requirement in `REQUIREMENTS.md` is assessed here for applicability and, where it applies, where it's met or why not. |
 
 ## Erasure (O.Del_1): how I would do it
 
+Dr. Keller's objection ("that's our evidence if something goes wrong clinically") and Mara's
+instruction ("don't build anything that makes it impossible") point at the same resolution:
+erase the patient's health data and consent records, but keep the audit trail — with the direct
+identifiers stripped from it — using the existing legal retention duty (O.Log_3's ten years) as
+the lawful basis for not deleting that specific evidence (this mirrors GDPR Art. 17(3)(b): the
+right to erasure doesn't override data kept to comply with a separate legal obligation).
+
+Concretely, on an erasure request for a patient:
+1. `DELETE FROM diary_entries WHERE patient_id = ?` and `DELETE FROM shares WHERE patient_id = ?`
+   — the health data and consent records are gone outright; nothing requires keeping them.
+2. Pseudonymize the `patients` row in place rather than deleting it (`name`, `email` overwritten,
+   e.g. `'Erased patient'` / `erased-<id>@deleted.invalid`; `timezone`/`id` kept) instead of
+   deleting it outright, because `access_logs.patient_id` has a foreign key to it — deleting the
+   row would either cascade-delete the audit evidence (defeating the point) or fail outright.
+   `access_logs` rows themselves are left untouched: they never held health data or free text to
+   begin with (just `clinician_id`, `accessed_at`, `entry_ids`), so there's nothing further to
+   strip from them, and `entry_ids` pointing at now-deleted entries is fine for a historical
+   audit pointer.
+3. None of this requires a schema change — the current FK (`access_logs.patient_id` references
+   `patients`, not `diary_entries`) was already chosen with this in mind, confirming Mara's
+   requirement is satisfiable without today's schema getting in the way.
+
+Not built now because it's an explicit stretch goal and needs a real decision this take-home
+can't make alone: who can trigger it (presumably a support/compliance flow, not a self-service
+endpoint patients call directly, given the irreversibility) and what confirms the request is
+genuine.
+
 ## Monitoring
 
-What would we want to know, how do you measure it, and when should someone act?
+On-call (Lukas) — "tell me what to measure, what wakes me up, what waits, how I see it on fire":
+
+- **Primary, pages immediately:** `access_log_write_failures_total` (added this session). Any
+  increase means O.Log_1 couldn't be satisfied and, per the fail-closed design, a doctor was
+  just blocked from opening a diary — this is deliberately a direct, specific signal with no
+  judgement calls needed about thresholds: _any_ increase is actionable right now.
+- **Secondary, pages on sustained increase:** 5xx rate on
+  `GET /clinician/patients/{patient_id}/entries`, from the existing `http_requests_total{route,
+  status}` counter (no new metric needed — route is a path template, not a patient id, so this
+  was already label-safe). Catches failures upstream of the access-log write (e.g. the DB being
+  down entirely). A single 5xx isn't worth a page; several within a few minutes is.
+- **Not actionable, don't page:** `403` (wrong role token) and `200` with `[]` (no valid share,
+  or a share with nothing in range) on that same route — both are normal, expected outcomes of
+  clinicians using the system, not failures.
+- **"See what's going on when it's on fire":** the new
+  `observability/dashboards/sharing-overview.json` Grafana dashboard (`make observe`, then
+  `localhost:28003`, folder "Diary") — write-failures
+  panel, a by-status breakdown of the clinician-read route, and the existing `api-overview`
+  dashboard's general latency/error panels for broader context. Both read from the same
+  `/metrics` Prometheus already scrapes (`observability/prometheus.yml`); production would wire
+  the same counters into Datadog per the repo's existing comment that "production uses Datadog."
+
+Product (Mara) — "do patients use sharing, and do the ones who share keep logging?":
+
+- **Adoption** (do patients use it): "Shares created per hour" panel on the same dashboard,
+  built from the existing `http_requests_total{route="/shares", method="POST", status="201"}`
+  counter — no new metric needed. This is an aggregate trend (count of share-creation events
+  over time), not a distinct-patient count, because patient ids can't be metric labels.
+- **Retention** (do sharers keep logging): deliberately **not** a live metric. It's a per-patient
+  cohort comparison — diary-entry rate for patients who created a share vs. those who didn't,
+  before/after their first share — which needs patient-level join logic a Prometheus counter
+  can't express (and patient ids can't be metric labels regardless). This is a periodic
+  analytical query against the database instead, e.g. comparing weekly `diary_entries` counts
+  per patient in the 4 weeks before vs. after their first `shares` row, against the same window
+  for patients with no shares at all. Recommended cadence: first check after ~4-6 weeks (enough
+  patients will have both a share and enough days-after to compare), then again near the
+  3-month mark when Mara needs to report out — a product-review cadence, not something to page
+  on.
 
 ## Screenshots
 
