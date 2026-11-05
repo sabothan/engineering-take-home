@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make test)",
+      "Bash(make test-api)",
+      "Bash(make test-app)",
+      "Bash(make lint)",
+      "Bash(make up)",
+      "Bash(make restart)"
+    ],
+    "ask": [
+      "Bash(make reset)",
+      "Bash(make migration *)",
+      "Bash(git commit *)"
+    ],
+    "deny": [
+      "Bash(git push *)"
+    ]
+  }
+}
