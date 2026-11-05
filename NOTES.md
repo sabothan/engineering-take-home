@@ -44,6 +44,18 @@ Time spent: **TODO**
   `access_logs` directly via SQL to match, rather than downgrading/upgrading, since the DBs
   already matched everything else the merged migration defines.
 
+- `POST /shares` endpoint decisions (`backend/app/api.py`): an unknown `clinician_id` returns
+  `422` (covered by `API.md`'s general "invalid input returns 422"); `to_date < from_date`
+  returns `422` via a Pydantic validator on `ShareIn` rather than letting the DB's
+  `share_date_range` CheckConstraint raise a raw `IntegrityError`/500.
+- `POST /shares/{id}/revoke`: revoking a share that doesn't exist, or that belongs to another
+  patient, both return `404` — I made them indistinguishable as a conservative default (not
+  required by any doc, but avoids leaking which share ids exist for other patients). Revoke is
+  idempotent: calling it again on an already-revoked share returns its existing state unchanged,
+  not an error.
+- `consent_version` is never set explicitly by `POST /shares` — it relies on `Share`'s
+  `server_default="v1"`, so O.Cons_3 is covered at the model layer without endpoint code.
+
 ## Data model decisions
 
 - `shares` table (`backend/app/models.py`): `patient_id`/`clinician_id` as FKs, `from_date`/
@@ -78,10 +90,10 @@ Time spent: **TODO**
 | ID | Applies? | Where it is met (code, test), or why not |
 | --- | --- | --- |
 | O.Purp_1 | | |
-| O.Cons_1 | | |
-| O.Cons_2 | | |
+| O.Cons_1 | Yes | A share only grants access while `revoked_at IS NULL`, and scopes exactly what was consented to (clinician, date range, `include_notes`). Fully enforced once the clinician-read endpoint checks this live on every read (next step); creation/revoke already maintain the state it will check. |
+| O.Cons_2 | Yes | Revoking sets `revoked_at` immediately (`POST /shares/{id}/revoke`); there's no caching of share validity, so every subsequent access check reads current DB state — a withdrawal takes effect for every access from that point on. |
 | O.Cons_3 | Yes | `shares.consent_version` (internal, not in the API response) records the consent wording version at creation time. See "Data model decisions". |
-| O.Auth_1 | | |
+| O.Auth_1 | Yes | Not met. The auth stub (`backend/app/auth.py`) is `Bearer <role>-<id>` with no session or login timestamp at all, so there is no "last authenticated" moment to check against 15 minutes. Implementing real re-auth would mean building a session/login system that's explicitly out of scope ("real authentication is out of scope", `auth.py`). |
 | O.Pass_1 | | |
 | O.Log_1 | | |
 | O.Log_2 | | |
