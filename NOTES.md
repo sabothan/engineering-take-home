@@ -11,7 +11,7 @@ Timeline:
   rather than cutting it short, but didn't review that code line by line the way I did the
   backend (see "How I used AI").
 - 15:19 - Stopped the clock.
-- 15:19-17:15 - After the clock: `NOTES.md` write-up, screenshots, committing. No feature code
+- 15:19-17:35 - After the clock: `NOTES.md` write-up, screenshots, committing. No feature code
   changed. (This is why the "Add overtime frontend code" commit is timestamped 15:40: the code was
   finished before 15:19 and committed afterwards.)
 
@@ -20,7 +20,7 @@ Time spent:
 - 2h 00min on the 2h budget itself (pause and Flutter overtime excluded).
 - 2h 23min including the Flutter overtime, excluding the pause.
 - 2h 55min elapsed from start to stopping the clock, including the pause.
-- About 2h after the clock on write-up and submission.
+- About 2h 15min after the clock on write-up, a cross-model review, and submission.
 
 I went into overtime with the Flutter part. Generating the contents of `app/` took the agent
 approximately 25 minutes in one continuous job; I waited for it to finish and did not make further
@@ -157,7 +157,7 @@ adjustments. Screenshots are attached (see "Screenshots").
 | O.Log_1 | Yes | Partly met. `GET /clinician/patients/{id}/entries` writes an `access_logs` row (accessing clinician, entries actually returned, time) on every successful read where a valid share existed, including zero-entry reads. See `test_clinician_access.py`. Gap: "the data accessed" is recorded as `entry_ids` only, not whether notes were disclosed; after a revoke or a new share without notes, the record can't show whether the clinician saw the note text. See "Next steps". |
 | O.Log_2 | Yes | `GET /access-log`, scoped to the authenticated patient. See `test_clinician_access.py::test_access_log_records_clinician_access_with_entry_ids`. |
 | O.Log_3 | Yes | Partly met. App-level only: no code path updates/deletes `access_logs` rows. No DB-level enforcement yet; a trigger would provide it without a second DB role (see "Data model decisions"). |
-| O.Log_4 | Yes | Was violated: request-logging middleware (`backend/app/main.py`, `log_requests`) logged the full request body, leaking `mood`/`symptoms`/`note`. Fixed by removing the body read and the `body=%s` log field (`test_logging.py`). Residual gaps, not fixed before submission: (1) the same log line still uses `request.url.path` (the raw path) rather than the route template, so `GET /clinician/patients/{patient_id}/entries` logs the literal `patient_id` on every call - the metric two lines below it already uses the route template (`request.scope["route"].path`); (2) uvicorn's own access logger, enabled by default (`backend/Dockerfile` CMD), also logs the raw path, so fixing the middleware alone isn't enough. A patient id isn't a "name or email address" per `REQUIREMENTS.md`'s own examples, but it's in tension with `CLAUDE.md`'s stricter "no direct identifiers in application logs." See "Next steps". |
+| O.Log_4 | Yes | Was violated: request-logging middleware (`backend/app/main.py`, `log_requests`) logged the full request body, leaking `mood`/`symptoms`/`note`. Fixed by removing the body read and the `body=%s` log field (`test_logging.py`). Residual gaps, not fixed before submission: (1) found on my own self-review after the clock: the same log line still uses `request.url.path` (the raw path) rather than the route template, so `GET /clinician/patients/{patient_id}/entries` logs the literal `patient_id` on every call - the metric two lines below it already uses the route template (`request.scope["route"].path`); (2) found in the cross-model review: uvicorn's own access logger, enabled by default (`backend/Dockerfile` CMD), also logs the raw path, so fixing the middleware alone isn't enough. A patient id isn't a "name or email address" per `REQUIREMENTS.md`'s own examples, but it's in tension with `CLAUDE.md`'s stricter "no direct identifiers in application logs." See "Next steps". |
 | O.Mon_1 | Yes | Partly met. `access_log_write_failures_total` counter increments and the request fails closed (`503`) if the `AccessLog` insert fails; graphed on the "Sharing overview" Grafana dashboard. See `test_fails_closed_when_access_log_write_fails` and "Monitoring" below. Gap: a graph is not an alert. No alert rule is provisioned (`observability/grafana/alerting/` is still empty); see "Next steps". |
 | O.Err_1 | Yes | FastAPI runs with `debug=False` (the default; never set otherwise), so unhandled exceptions get Starlette's generic 500 body, not a traceback/SQL/file path. Regression-tested in `test_error_handling.py::test_unhandled_error_does_not_leak_internals` by forcing an unexpected `RuntimeError` inside an endpoint and asserting the response body contains none of it. |
 | O.Cryp_1 | Yes | Not met in this dev setup. In production this is normally satisfied at the managed-disk/DB layer (e.g. the cloud provider's encrypted volumes for the Postgres instance), which is an infra/deployment concern outside this repo's local `docker-compose.yml` (plain `postgres:16-alpine`, no encryption configured) and outside the application code. See "Next steps" for the column-level alternative I considered and didn't build. |
@@ -297,7 +297,7 @@ Tools, workflow, and where you corrected the agent. Session transcripts are welc
 
 **Tool:** Claude Code (CLI), running Claude Sonnet 5, for the whole feature - backend, Flutter,
 the Grafana dashboard, and this file. No other AI tool used. A transcript is in
-`notes/agent-log.txt` (user turns verbatim, tool calls summarized).
+`notes/agent-log.md` (user turns verbatim, assistant replies verbatim, tool calls summarized).
 
 **Workflow:** I had it read `README.md`/`BRIEF.md`/`API.md`/`REQUIREMENTS.md`/`DESIGN.md` first
 and give me a short overview before touching anything, matching `CLAUDE.md`'s instructions in
@@ -340,33 +340,26 @@ generated directly from what we'd already agreed on, not independently designed 
   the first item in "Next steps".
 
 - **Cross-checked with a second model:** after pushing the feature branch, I gave Claude Opus 5.5
-  (via claude.ai, a separate session from this one) read access to the full repository - code and
-  `NOTES.md` both - and asked it to independently review the submission. Using a different model
-  that hadn't written the code, and wasn't carrying this session's blind spots, surfaced three
-  real gaps Sonnet 5 had missed during the original work:
-  - O.Log_4's fix was incomplete: the request-logging middleware logs `request.url.path` (the
-    raw, parameter-interpolated path), not the route template already used for metrics two lines
-    above - so `GET /clinician/patients/{patient_id}/entries` logs the literal `patient_id` on
-    every call. Uvicorn's own access logger (enabled by default, never disabled in the
-    Dockerfile) independently logs the same raw path.
-  - `app_events_total`'s event label has no allow-list, only a format regex - any authenticated
-    client can mint new Prometheus label values, exactly what `CLAUDE.md`'s "labels must have a
-    small, fixed set of values" rule is meant to prevent. Pre-existing, not introduced this
-    session, but never flagged.
-  - The original erasure design (delete `shares` along with `diary_entries`) would have
-    undermined the audit trail it was meant to preserve: without the `shares` rows, the retained
-    `access_logs` entries would have no surviving proof that consent existed when a clinician's
-    read happened. The revision keeps `shares` (revoking any active ones) as the consent evidence
-    underpinning O.Log_3's retained records.
-
-  Opus also tightened several "Yes" verdicts in the requirements table to "Partly met" with a
-  concrete, named gap on each (O.Cons_3, O.Log_1, O.Log_3, O.Mon_1), credited the agent's own
-  widget tests - not just my manual click-through - for catching the Flutter `setState`/encoding
-  bugs, and reordered "Next steps" into 12 prioritized items reflecting all of the above.
-
-  It did not commit or push the revised file itself - it followed the same "never commit or
-  push" rule from `CLAUDE.md` (and had no push access to the fork regardless) and handed the file
-  back for me to review and apply myself.
+  (claude.ai, a separate session) read access to the repository and asked it to review the code
+  and `NOTES.md`. A model that hadn't written the code found gaps that Sonnet 5 and I had missed:
+  - **O.Log_3, wrong premise.** Sonnet 5 framed the choice as "app-level only" vs. "DB-level
+    `REVOKE`", I picked app-level because `REVOKE` needs a second DB role, and neither of us
+    considered a `BEFORE UPDATE OR DELETE` trigger, which needs no extra role and fits in a
+    migration (see `notes/agent-log.md`). Verdict changed to "Partly met".
+  - **O.Mon_1, no alert.** The counter and dashboard panel exist, but no alert rule is
+    provisioned, and a graph is not an alert. Verdict changed to "Partly met".
+  - **O.Log_4, second leak.** I had already found that the middleware logs the raw path
+    (`patient_id` included). The review added that uvicorn's own access logger, enabled by
+    default, logs the same raw path.
+  - **Erasure design.** Deleting `shares` together with `diary_entries` would have removed the
+    consent evidence that makes the retained `access_logs` rows lawful. The plan now keeps
+    `shares` and revokes any active ones.
+  - **Telemetry cardinality.** `app_events_total`'s event label has a format regex but no
+    allow-list, so any authenticated client can create new label values. Pre-existing, never
+    flagged.
+  - It also downgraded O.Cons_3 (version is a server default, not the wording shown) and O.Log_1
+    (note disclosure not recorded) to "Partly met", and corrected my attribution of the two
+    Flutter bugs to the agent's widget tests.
 
 ## Next steps
 

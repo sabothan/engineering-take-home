@@ -1,4 +1,4 @@
-# Scratch log for corrected agent submissions
+# Claude Code session transcript: "Share my diary with my doctor"
 
 Full transcript of the Claude Code session that implemented "Share my diary with my doctor".
 User turns are verbatim. Assistant turns are the actual text replies sent during the session;
