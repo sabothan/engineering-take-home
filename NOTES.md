@@ -1,6 +1,10 @@
 # Notes
 
-Time spent:
+Start: 2026-11-05 12:33
+
+End: 2026-11-05 **TODO**
+
+Time spent: **TODO**
 
 ## Assumptions and open questions
 
