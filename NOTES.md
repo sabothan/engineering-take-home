@@ -2,12 +2,26 @@
 
 Date: 2026-11-05
 
-Start: 12:33
-Pause: 12:42 - 13:04: _Caused by setup problems on my side_.
+Timeline:
 
-End: 15:19
+- 12:33 — Started.
+- 12:42–13:04 (22 min) — Paused: a Claude Code tool-permission issue on my machine (not the repo)
+  blocked file edits; fixed my own settings and resumed.
+- 14:56–15:19 — Ran into overtime on the Flutter screens; finished the frontend here rather than
+  cutting it short, but didn't review that code line by line the way I did the backend (see
+  "How I used AI").
+- 15:19 — Stopped the clock.
 
-Time spent (total): 2h 22min
+Time spent:
+
+- 2h 00min on the 2h budget itself (pause and Flutter overtime excluded).
+- 2h 23min including the Flutter overtime, excluding the pause.
+- 2h 55min total elapsed from start to finish, including the pause.
+
+I went into overtime with the Flutter part. Building the contents of `app/` took approximately
+25 minutes of continuous computation time, so I waited for this single job to finish and did not
+apply further adjustments — I do not consider it "work to be graded" for this assignment.
+Nonetheless, some screenshots of it are attached (see "Screenshots").
 
 ## Assumptions and open questions
 
@@ -118,7 +132,7 @@ Time spent (total): 2h 22min
 
 | ID | Applies? | Where it is met (code, test), or why not |
 | --- | --- | --- |
-| O.Purp_1 | Yes | Applies to the app's share-creation screen (show recipient, data categories, period before the patient confirms) — not yet built. Backend has nothing to show here; will be met when `app/` adds the sharing screen. |
+| O.Purp_1 | Yes | Met by `ShareScreen`'s review step (`app/lib/share_screen.dart`): before `POST /shares` is called, it shows the recipient (clinician name + practice), the data categories ("Mood and symptoms" or "Mood, symptoms and notes"), and the period, with an explicit "Review and share" step before the final "Share diary" confirm. **`ShareScreen` is a frontend element from the Flutter overtime work (see header) — not reviewed by me; included here only for completeness.** |
 | O.Cons_1 | Yes | A share only grants access while `revoked_at IS NULL`, and scopes exactly what was consented to (clinician, date range, `include_notes`). Enforced live on every read: `GET /clinician/patients/{id}/entries` queries `revoked_at IS NULL` directly, no caching. |
 | O.Cons_2 | Yes | Revoking sets `revoked_at` immediately (`POST /shares/{id}/revoke`); there's no caching of share validity, so every subsequent access check reads current DB state — a withdrawal takes effect for every access from that point on. |
 | O.Cons_3 | Yes | `shares.consent_version` (internal, not in the API response) records the consent wording version at creation time. See "Data model decisions". |
@@ -127,7 +141,7 @@ Time spent (total): 2h 22min
 | O.Log_1 | Yes | `GET /clinician/patients/{id}/entries` writes an `access_logs` row (accessing clinician, entries actually returned, time) on every successful read where a valid share existed, including zero-entry reads. See `test_clinician_access.py`. |
 | O.Log_2 | Yes | `GET /access-log`, scoped to the authenticated patient. See `test_clinician_access.py::test_access_log_records_clinician_access_with_entry_ids`. |
 | O.Log_3 | Yes | App-level only: no code path updates/deletes `access_logs` rows. No DB-level enforcement (no `REVOKE`, no trigger) — see "Data model decisions" for why. |
-| O.Log_4 | Yes | Was violated: request-logging middleware (`backend/app/main.py`, `log_requests`) logged the full request body, leaking `mood`/`symptoms`/`note`. Fixed by removing the body read and the `body=%s` log field. |
+| O.Log_4 | Yes | Was violated: request-logging middleware (`backend/app/main.py`, `log_requests`) logged the full request body, leaking `mood`/`symptoms`/`note`. Fixed by removing the body read and the `body=%s` log field. Residual gap found on a later self-review, not fixed before submission: the same log line still uses `request.url.path` (the raw path) rather than the route template, so `GET /clinician/patients/{patient_id}/entries` logs the literal `patient_id` on every call — the metric two lines below it already uses the route template (`request.scope["route"].path`) and doesn't have this problem. A patient id isn't a "name or email address" per `REQUIREMENTS.md`'s own examples, but it's in tension with `CLAUDE.md`'s stricter "no direct identifiers in application logs." See "Next steps". |
 | O.Mon_1 | Yes | `access_log_write_failures_total` counter increments and the request fails closed (`503`) if the `AccessLog` insert fails; graphed on the "Sharing overview" Grafana dashboard. See "Data model decisions", `test_fails_closed_when_access_log_write_fails`, and "Monitoring" below. |
 | O.Err_1 | Yes | FastAPI runs with `debug=False` (the default; never set otherwise), so unhandled exceptions get Starlette's generic 500 body, not a traceback/SQL/file path. Regression-tested in `test_error_handling.py::test_unhandled_error_does_not_leak_internals` by forcing an unexpected `RuntimeError` inside an endpoint and asserting the response body contains none of it. |
 | O.Cryp_1 | Yes | Not met in this dev setup. In production this is normally satisfied at the managed-disk/DB layer (e.g. the cloud provider's encrypted volumes for the Postgres instance), which is an infra/deployment concern outside this repo's local `docker-compose.yml` (plain `postgres:16-alpine`, no encryption configured) and outside the application code. See "Erasure" below for a related note on column-level alternatives I considered and didn't build. |
@@ -158,10 +172,23 @@ Concretely, on an erasure request for a patient:
    `patients`, not `diary_entries`) was already chosen with this in mind, confirming Mara's
    requirement is satisfiable without today's schema getting in the way.
 
-Not built now because it's an explicit stretch goal and needs a real decision this take-home
-can't make alone: who can trigger it (presumably a support/compliance flow, not a self-service
-endpoint patients call directly, given the irreversibility) and what confirms the request is
-genuine.
+**Trigger model, decided but not built:** a self-service `DELETE /me`, callable by the
+authenticated patient (`current_patient`), doing exactly the three steps above and returning
+`204`. Chosen over gating it behind a new "support/admin" role because the auth stub only has
+`patient`/`clinician` — adding a third role just to demo this stretch goal would be scaffolding
+for the sake of scaffolding, not something the feature itself needs. The trade-off: a real
+production version almost certainly shouldn't let one unauthenticated-in-any-stronger-sense
+bearer token irreversibly erase an account in a single call — it should sit behind identity
+re-verification and probably a support/compliance review step, exactly the kind of thing O.Auth_1
+would normally require ("re-authenticate if last authentication is older than 15 minutes") if
+this auth system had a real login to re-check. I'm choosing to demonstrate the erasure mechanism
+itself (what gets deleted vs. pseudonymized vs. kept, and why) rather than building a parallel
+admin/support auth system that's out of scope for what this feature needs.
+
+Not built — not even the endpoint — because the step after this write-up is still "describe it,"
+per `BRIEF.md` ("let's not build erasure in this iteration... please don't build anything that
+makes it impossible... write down how you would do it"). See "Next steps" for what actually
+implementing `DELETE /me` would involve.
 
 ## Monitoring
 
@@ -206,9 +233,61 @@ Product (Mara) — "do patients use sharing, and do the ones who share keep logg
 
 ## Screenshots
 
+Added by hand after manually verifying the app in the browser. **The sharing screens shown here
+are the Flutter overtime work (see header) — not reviewed by me line by line; shown only for
+completeness, not as reviewed work.** The Grafana dashboard screenshot shows
+`observability/dashboards/sharing-overview.json`, which is backend-side config I did review.
+
+![My diary, with the share icon in the app bar](notes/screenshots/diary.png)
+
+_"My diary"_ — entry point to sharing: the share icon top-right opens the "Sharing" screen.
+
+![The Sharing screen, listing active shares with a doctor](notes/screenshots/sharing-list.png)
+
+_"Sharing"_ — three active shares with Dr. Lena Hofmann (created with different `from_date`s
+during testing), each showing the doctor, period, data categories, and a "Revoke access" action;
+"Who saw your diary" link and the "Share with a doctor" FAB.
+
+![Who saw your diary, listing access records](notes/screenshots/access-log.png)
+
+_"Who saw your diary"_ (O.Log_2) — five access records from Dr. Lena Hofmann. All five share a
+timestamp because they're from a burst of test `curl` calls made in quick succession; each read
+still correctly produced its own audit row (O.Log_1).
+
+![Grafana "Sharing overview" dashboard with live data](notes/screenshots/grafana-sharing-overview.png)
+
+_Grafana "Sharing overview"_ — the on-call and product panels with real data from the test
+traffic: access-log write failures flat at zero, clinician reads by status, and shares created
+per hour.
+
 ## How I used AI
 
 Tools, workflow, and where you corrected the agent. Session transcripts are welcome but optional.
+
+**Tool:** Claude Code (CLI), running Claude Sonnet 5, for the whole feature — backend, Flutter,
+the Grafana dashboard, and this file. No other AI tool used.
+
+**Workflow:** I had it read `README.md`/`BRIEF.md`/`API.md`/`REQUIREMENTS.md`/`DESIGN.md` first
+and give me a short overview before touching anything, matching `CLAUDE.md`'s instructions in
+this repo. From there we went one step at a time: for each piece (the O.Log_4 fix, the `shares`
+table, the `access_log` table, the patient endpoints, the clinician endpoint, the remaining
+requirements, the monitoring signals, the Flutter screens, erasure), it stated a short plan
+before changing anything, and — important for how I actually used it — whenever the docs left a
+real design choice open (consent-version storage, the "no such patient" vs. "not shared with you"
+response, fail-open vs. fail-closed on an audit-write failure, the erasure trigger model, and
+others) it stopped and gave me the trade-offs as an explicit choice instead of picking silently.
+I made those calls; they're recorded throughout "Assumptions and open questions" and the
+requirements table with my reasoning attached, not just the outcome.
+
+Tests were written alongside each change, not after — for the trickier ones (the request-body
+logging fix, the fail-closed access-log write, the timezone/`app-v1` bucketing) it deliberately
+broke the fix, showed me the test catching the regression, then restored it, rather than me
+having to trust an untested claim. I used it the same way for documentation: `NOTES.md` was
+built up incrementally as we went, not written at the end from memory.
+
+Backend code I reviewed and directed step by step, the way described above. The Flutter screens
+were a different workflow — see below — and the dashboard JSON and this log file were generated
+directly from what we'd already agreed on, not independently designed by the model.
 
 - Corrected the agent: it renamed the autogenerated migration file/revision id
   (`a61e8acbf10a` → `0002`) to match the repo's `000N_name.py` convention, but didn't re-stamp
@@ -235,3 +314,50 @@ Tools, workflow, and where you corrected the agent. Session transcripts are welc
   instead, which I did go through properly.
 
 ## Next steps
+
+In rough priority order:
+
+1. **Manually review the Flutter sharing screens.** The single biggest gap: `access_log_screen
+   .dart`, `sharing_screen.dart`, `share_screen.dart`, and the sharing-related diffs to
+   `models.dart`/`api.dart`/`widgets.dart`/`diary_screen.dart` were generated in one pass without
+   my line-by-line review (see "How I used AI"). Behaviour is verified (tests pass, I clicked
+   through the app), but I want to actually read it the way I read the backend before I'd call it
+   done.
+
+2. **Implement `DELETE /me` (O.Del_1)**, per the trigger model decided above: `current_patient`-
+   gated, deletes `diary_entries`/`shares` for that patient, pseudonymizes the `patients` row
+   (`name`, `email`), leaves `access_logs` untouched, returns `204`. No migration needed — the
+   schema already supports this. Tests: entries/shares gone after the call; the patient's prior
+   `access_logs` rows (and their `entry_ids`) still exist and still resolve a (now pseudonymized)
+   `clinician_name`/patient association; calling it twice doesn't error.
+
+3. **Fix the request-log line in `log_requests` (`backend/app/main.py`) to log the route template
+   instead of `request.url.path`**, matching what the `REQUESTS`/`LATENCY` metrics on the same
+   line already do (`request.scope["route"].path`). Found on a later self-review (see the O.Log_4
+   row above); small, low-risk change, but not made before submission since it surfaced after the
+   timer stopped.
+
+4. **Screenshots.** Added under "Screenshots" above: the sharing screens (list, create/review,
+   access log — the Flutter overtime work, not reviewed by me, included for completeness only)
+   and the Grafana "Sharing overview" dashboard, per the submission checklist in `README.md`.
+
+5. **DB-level enforcement for `access_logs`** (O.Log_3): add a second, privilege-separated
+   Postgres role that the app connects as for everything except this table, and `REVOKE UPDATE,
+   DELETE` from it there — currently only enforced by "no code path does this," not by Postgres
+   itself. Needs its own `docker-compose.yml`/migration work, deliberately deferred this session
+   (see "Data model decisions").
+
+6. **O.Auth_1 and O.Pass_1** can't be meaningfully implemented without a real login/session
+   system, which is explicitly out of scope for this auth stub. If this feature went further than
+   a take-home, the right order would be: build real authentication first, then O.Auth_1's
+   15-minute re-auth check becomes meaningful (and so does gating `DELETE /me` behind it).
+
+7. **O.Cryp_1** (encryption at rest): confirm with whoever provisions the production database
+   that the managed Postgres instance's disk is encrypted (this is normally a checkbox at the
+   cloud-provider level, not application code). If column-level encryption inside Postgres were
+   additionally required (e.g. via `pgcrypto`), `mood`/`symptoms`/`note` on `diary_entries` would
+   be the columns to encrypt — at the cost of losing the ability to query/index on them directly.
+
+8. **Retention analysis for the product monitoring signal** (see "Monitoring"): the actual
+   cohort query comparing diary-entry rates for patients who share vs. don't, run once there's
+   enough real usage data (recommended first look: ~4-6 weeks in).
