@@ -339,6 +339,35 @@ generated directly from what we'd already agreed on, not independently designed 
   consent-review step, revoke, empty/non-empty access log). Reviewing this code line by line is
   the first item in "Next steps".
 
+- **Cross-checked with a second model:** after pushing the feature branch, I gave Claude Opus 5.5
+  (via claude.ai, a separate session from this one) read access to the full repository - code and
+  `NOTES.md` both - and asked it to independently review the submission. Using a different model
+  that hadn't written the code, and wasn't carrying this session's blind spots, surfaced three
+  real gaps Sonnet 5 had missed during the original work:
+  - O.Log_4's fix was incomplete: the request-logging middleware logs `request.url.path` (the
+    raw, parameter-interpolated path), not the route template already used for metrics two lines
+    above - so `GET /clinician/patients/{patient_id}/entries` logs the literal `patient_id` on
+    every call. Uvicorn's own access logger (enabled by default, never disabled in the
+    Dockerfile) independently logs the same raw path.
+  - `app_events_total`'s event label has no allow-list, only a format regex - any authenticated
+    client can mint new Prometheus label values, exactly what `CLAUDE.md`'s "labels must have a
+    small, fixed set of values" rule is meant to prevent. Pre-existing, not introduced this
+    session, but never flagged.
+  - The original erasure design (delete `shares` along with `diary_entries`) would have
+    undermined the audit trail it was meant to preserve: without the `shares` rows, the retained
+    `access_logs` entries would have no surviving proof that consent existed when a clinician's
+    read happened. The revision keeps `shares` (revoking any active ones) as the consent evidence
+    underpinning O.Log_3's retained records.
+
+  Opus also tightened several "Yes" verdicts in the requirements table to "Partly met" with a
+  concrete, named gap on each (O.Cons_3, O.Log_1, O.Log_3, O.Mon_1), credited the agent's own
+  widget tests - not just my manual click-through - for catching the Flutter `setState`/encoding
+  bugs, and reordered "Next steps" into 12 prioritized items reflecting all of the above.
+
+  It did not commit or push the revised file itself - it followed the same "never commit or
+  push" rule from `CLAUDE.md` (and had no push access to the fork regardless) and handed the file
+  back for me to review and apply myself.
+
 ## Next steps
 
 In rough priority order:
