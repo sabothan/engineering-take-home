@@ -56,6 +56,35 @@ Time spent: **TODO**
 - `consent_version` is never set explicitly by `POST /shares` — it relies on `Share`'s
   `server_default="v1"`, so O.Cons_3 is covered at the model layer without endpoint code.
 
+- `GET /clinician/patients/{id}/entries` (`backend/app/api.py`): "no such patient" and "not
+  shared with you" (never shared, or revoked) all return `200` with `[]` — the same response as
+  a genuinely valid share that happens to cover no entries. `API.md` documents no error response
+  for this endpoint, so there's no undocumented status code to add, and it trivially satisfies
+  "a clinician must not be able to tell those apart" since there's nothing to distinguish. This
+  falls out of the query itself: `Share.patient_id` has an FK to `patients`, so a nonexistent
+  patient can never have an active share — no separate "does the patient exist" check needed.
+- Multiple active shares from the same clinician to the same patient (allowed, since `shares` has
+  no uniqueness constraint) are unioned: an entry is visible if its local calendar date falls
+  within _any_ active share's range; its note is included if _any_ covering active share has
+  `include_notes=true`. Not specified anywhere, but a direct consequence of allowing concurrent
+  shares — some rule was needed, and "most permissive applicable grant wins" seemed the least
+  surprising to a patient who created multiple shares on purpose.
+- Calendar-day matching: for `source != "app-v1"` entries, `recorded_at` (a true UTC instant) is
+  converted to the patient's local date via `zoneinfo.ZoneInfo(patient.timezone)`. For
+  `source == "app-v1"` entries, `recorded_at.date()` is used directly with no conversion, since
+  those rows' local wall-clock time was stored mislabelled as UTC (`BRIEF.md`, Tom). Tested by
+  constructing an entry whose UTC and Berlin-local dates differ.
+- O.Mon_1 (alert on a failed access record): wrapped the `AccessLog` insert in try/except;
+  on failure it increments `access_log_write_failures_total` (an unlabelled Prometheus counter —
+  no patient/clinician id, per the hard constraint on metric labels) and logs one generic ERROR
+  line with no ids or health data. The request then **fails closed**: `503`, no entries
+  returned, rather than disclosing health data that couldn't be proven audited. This trades
+  availability (a doctor blocked right before an appointment during a DB blip — `BRIEF.md`,
+  Lukas) for audit integrity; tested by monkeypatching `Session.commit` to fail and asserting a
+  `503` with no entries and the counter incrementing.
+- Reused the existing `EntryOut` schema for this endpoint's response instead of adding a new one,
+  since `API.md`'s shape for it (`id`, `recorded_at`, `mood`, `symptoms`, `note`) is identical.
+
 ## Data model decisions
 
 - `shares` table (`backend/app/models.py`): `patient_id`/`clinician_id` as FKs, `from_date`/
@@ -90,16 +119,16 @@ Time spent: **TODO**
 | ID | Applies? | Where it is met (code, test), or why not |
 | --- | --- | --- |
 | O.Purp_1 | | |
-| O.Cons_1 | Yes | A share only grants access while `revoked_at IS NULL`, and scopes exactly what was consented to (clinician, date range, `include_notes`). Fully enforced once the clinician-read endpoint checks this live on every read (next step); creation/revoke already maintain the state it will check. |
+| O.Cons_1 | Yes | A share only grants access while `revoked_at IS NULL`, and scopes exactly what was consented to (clinician, date range, `include_notes`). Enforced live on every read: `GET /clinician/patients/{id}/entries` queries `revoked_at IS NULL` directly, no caching. |
 | O.Cons_2 | Yes | Revoking sets `revoked_at` immediately (`POST /shares/{id}/revoke`); there's no caching of share validity, so every subsequent access check reads current DB state — a withdrawal takes effect for every access from that point on. |
 | O.Cons_3 | Yes | `shares.consent_version` (internal, not in the API response) records the consent wording version at creation time. See "Data model decisions". |
 | O.Auth_1 | Yes | Not met. The auth stub (`backend/app/auth.py`) is `Bearer <role>-<id>` with no session or login timestamp at all, so there is no "last authenticated" moment to check against 15 minutes. Implementing real re-auth would mean building a session/login system that's explicitly out of scope ("real authentication is out of scope", `auth.py`). |
 | O.Pass_1 | | |
-| O.Log_1 | | |
-| O.Log_2 | | |
+| O.Log_1 | Yes | `GET /clinician/patients/{id}/entries` writes an `access_logs` row (accessing clinician, entries actually returned, time) on every successful read where a valid share existed, including zero-entry reads. See `test_clinician_access.py`. |
+| O.Log_2 | Yes | `GET /access-log`, scoped to the authenticated patient. See `test_clinician_access.py::test_access_log_records_clinician_access_with_entry_ids`. |
 | O.Log_3 | Yes | App-level only: no code path updates/deletes `access_logs` rows. No DB-level enforcement (no `REVOKE`, no trigger) — see "Data model decisions" for why. |
 | O.Log_4 | Yes | Was violated: request-logging middleware (`backend/app/main.py`, `log_requests`) logged the full request body, leaking `mood`/`symptoms`/`note`. Fixed by removing the body read and the `body=%s` log field. |
-| O.Mon_1 | | |
+| O.Mon_1 | Yes | `access_log_write_failures_total` counter increments and the request fails closed (`503`) if the `AccessLog` insert fails. See "Data model decisions" and `test_fails_closed_when_access_log_write_fails`. Wiring this counter into an actual alert (e.g. a Grafana/Datadog rule) is part of the monitoring step, not yet done. |
 | O.Err_1 | | |
 | O.Cryp_1 | | |
 | O.Del_1 | | |
