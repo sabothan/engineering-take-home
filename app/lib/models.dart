@@ -1,3 +1,5 @@
+import 'format.dart';
+
 class DiaryEntry {
   const DiaryEntry({
     this.id,
@@ -27,4 +29,73 @@ class DiaryEntry {
     'symptoms': symptoms,
     'note': note,
   };
+}
+
+class Clinician {
+  const Clinician({required this.id, required this.name, required this.practice});
+
+  final int id;
+  final String name;
+  final String practice;
+
+  factory Clinician.fromJson(Map<String, dynamic> json) => Clinician(
+    id: json['id'] as int,
+    name: json['name'] as String,
+    practice: json['practice'] as String,
+  );
+}
+
+class Share {
+  const Share({
+    required this.id,
+    required this.clinicianId,
+    required this.fromDate,
+    required this.toDate,
+    required this.includeNotes,
+    required this.createdAt,
+    this.revokedAt,
+  });
+
+  final int id;
+  final int clinicianId;
+  final DateTime fromDate;
+  final DateTime toDate;
+  final bool includeNotes;
+  final DateTime createdAt;
+  final DateTime? revokedAt;
+
+  bool get isActive => revokedAt == null;
+
+  factory Share.fromJson(Map<String, dynamic> json) => Share(
+    id: json['id'] as int,
+    clinicianId: json['clinician_id'] as int,
+    fromDate: parseCalendarDate(json['from_date'] as String),
+    toDate: parseCalendarDate(json['to_date'] as String),
+    includeNotes: json['include_notes'] as bool,
+    createdAt: DateTime.parse(json['created_at'] as String),
+    revokedAt: json['revoked_at'] == null
+        ? null
+        : DateTime.parse(json['revoked_at'] as String),
+  );
+}
+
+class AccessLogEntry {
+  const AccessLogEntry({
+    required this.clinicianId,
+    required this.clinicianName,
+    required this.accessedAt,
+    required this.entryIds,
+  });
+
+  final int clinicianId;
+  final String clinicianName;
+  final DateTime accessedAt;
+  final List<int> entryIds;
+
+  factory AccessLogEntry.fromJson(Map<String, dynamic> json) => AccessLogEntry(
+    clinicianId: json['clinician_id'] as int,
+    clinicianName: json['clinician_name'] as String,
+    accessedAt: DateTime.parse(json['accessed_at'] as String),
+    entryIds: List<int>.from(json['entry_ids'] as List),
+  );
 }

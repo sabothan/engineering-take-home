@@ -4,6 +4,7 @@ import 'add_entry_screen.dart';
 import 'api.dart';
 import 'format.dart';
 import 'models.dart';
+import 'sharing_screen.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -36,6 +37,17 @@ class _DiaryScreenState extends State<DiaryScreen> {
   Widget build(BuildContext context) {
     final today = dayOf(DateTime.now());
     return Scaffold(
+      appBar: AppBar(
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.share_outlined),
+            tooltip: 'Share with your doctor',
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => SharingScreen(api: widget.api))),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addEntry,
         icon: const Icon(Icons.add),
