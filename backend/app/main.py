@@ -20,18 +20,16 @@ async def log_requests(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     started = time.perf_counter()
-    body = await request.body()
     response = await call_next(request)
     route = request.scope["route"].path if "route" in request.scope else "unmatched"
     REQUESTS.labels(request.method, route, response.status_code).inc()
     LATENCY.labels(request.method, route).observe(time.perf_counter() - started)
     logger.info(
-        "%s %s -> %s in %.0f ms, body=%s",
+        "%s %s -> %s in %.0f ms",
         request.method,
         request.url.path,
         response.status_code,
         (time.perf_counter() - started) * 1000,
-        body.decode(errors="replace") or "-",
     )
     return response
 
