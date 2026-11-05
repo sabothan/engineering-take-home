@@ -1,22 +1,37 @@
+import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.auth import User, current_patient, current_user
+from app.auth import User, current_clinician, current_patient, current_user
 from app.db import get_db
-from app.metrics import APP_EVENTS
-from app.models import Clinician, DiaryEntry, Share
-from app.schemas import ClinicianOut, EntryIn, EntryOut, Me, ShareIn, ShareOut, TelemetryEvent
+from app.metrics import ACCESS_LOG_WRITE_FAILURES, APP_EVENTS
+from app.models import AccessLog, Clinician, DiaryEntry, Patient, Share
+from app.schemas import (
+    AccessLogOut,
+    ClinicianOut,
+    EntryIn,
+    EntryOut,
+    Me,
+    ShareIn,
+    ShareOut,
+    TelemetryEvent,
+)
+
+logger = logging.getLogger("diary.access")
 
 router = APIRouter()
 
 Db = Annotated[Session, Depends(get_db)]
 AnyUser = Annotated[User, Depends(current_user)]
 PatientUser = Annotated[User, Depends(current_patient)]
+ClinicianUser = Annotated[User, Depends(current_clinician)]
 
 
 @router.get("/health")
@@ -80,6 +95,93 @@ def revoke_share(share_id: int, user: PatientUser, db: Db) -> Share:
         db.commit()
         db.refresh(share)
     return share
+
+
+@router.get("/access-log", response_model=list[AccessLogOut])
+def list_access_log(user: PatientUser, db: Db) -> list[dict[str, object]]:
+    query = (
+        select(AccessLog, Clinician.name)
+        .join(Clinician, Clinician.id == AccessLog.clinician_id)
+        .where(AccessLog.patient_id == user.id)
+        .order_by(AccessLog.accessed_at.desc())
+    )
+    return [
+        {
+            "clinician_id": log.clinician_id,
+            "clinician_name": name,
+            "accessed_at": log.accessed_at,
+            "entry_ids": log.entry_ids,
+        }
+        for log, name in db.execute(query)
+    ]
+
+
+@router.get("/clinician/patients/{patient_id}/entries", response_model=list[EntryOut])
+def list_patient_entries_for_clinician(
+    patient_id: int, user: ClinicianUser, db: Db
+) -> list[dict[str, object]]:
+    shares = db.scalars(
+        select(Share).where(
+            Share.patient_id == patient_id,
+            Share.clinician_id == user.id,
+            Share.revoked_at.is_(None),
+        )
+    ).all()
+    if not shares:
+        # Same empty response whether the patient doesn't exist, was never shared with this
+        # clinician, or revoked the share: a clinician must not be able to tell those apart.
+        return []
+
+    patient = db.get(Patient, patient_id)
+    assert patient is not None  # an active share can only exist for a real patient (FK)
+    tz = ZoneInfo(patient.timezone)
+
+    def local_date(entry: DiaryEntry) -> date:
+        # app-v1 entries stored local wall-clock time mislabelled as UTC: use it as-is.
+        if entry.source == "app-v1":
+            return entry.recorded_at.date()
+        return entry.recorded_at.astimezone(tz).date()
+
+    entries = db.scalars(
+        select(DiaryEntry)
+        .where(DiaryEntry.patient_id == patient_id)
+        .order_by(DiaryEntry.recorded_at.desc())
+    ).all()
+
+    visible = []
+    for entry in entries:
+        day = local_date(entry)
+        covering = [s for s in shares if s.from_date <= day <= s.to_date]
+        if not covering:
+            continue
+        visible.append(
+            {
+                "id": entry.id,
+                "recorded_at": entry.recorded_at,
+                "mood": entry.mood,
+                "symptoms": entry.symptoms,
+                "note": entry.note if any(s.include_notes for s in covering) else None,
+            }
+        )
+
+    try:
+        db.add(
+            AccessLog(
+                patient_id=patient_id,
+                clinician_id=user.id,
+                entry_ids=[e["id"] for e in visible],
+            )
+        )
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        ACCESS_LOG_WRITE_FAILURES.inc()
+        logger.error("Failed to record a clinician's diary access; the read was not served.")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Couldn't open the diary. Try again."
+        ) from None
+
+    return visible
 
 
 @router.post("/telemetry", status_code=204)
