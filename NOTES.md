@@ -36,6 +36,14 @@ Time spent: **TODO**
   renaming an already-applied migration's revision id must be paired with re-stamping
   `alembic_version` everywhere it was applied, in the same step.
 
+- Merged the separate `shares` and `access_logs` table migrations into one file
+  (`0002_add_shares_and_access_log_tables.py`, revision `"0002"`) since both were written in the
+  same session and hadn't been shared outside it — one migration for "add the sharing feature's
+  tables" reads cleaner than two. Both DBs were already stamped `0002` (with `shares` created,
+  `access_logs` not yet), so merging didn't change what Alembic thinks is applied; I created
+  `access_logs` directly via SQL to match, rather than downgrading/upgrading, since the DBs
+  already matched everything else the merged migration defines.
+
 ## Data model decisions
 
 - `shares` table (`backend/app/models.py`): `patient_id`/`clinician_id` as FKs, `from_date`/
@@ -49,6 +57,21 @@ Time spent: **TODO**
   share row itself is treated as the consent record: it's valid (grants access) exactly while
   `revoked_at IS NULL`, and captures exactly what was consented to (clinician, date range,
   whether notes are included) per O.Cons_1.
+- `access_logs` table (`backend/app/models.py`): `patient_id`/`clinician_id` FKs, `accessed_at`,
+  and `entry_ids` (the specific entries returned, frozen at access time — later edits or
+  re-sharing can't retroactively change what a past access record shows). One row per successful
+  `GET /clinician/patients/{id}/entries` call, including when it returns zero entries
+  (`entry_ids = []`): O.Log_1 says "every access", and the patient should see every time the
+  doctor opened the diary, not just the ones that returned content.
+- O.Log_3 ("protected against modification") is enforced for `access_logs` at the app level only:
+  no endpoint or code path in this app issues `UPDATE`/`DELETE` against it. There is no
+  database-level enforcement (no `REVOKE`, no trigger) — confirmed with `\dp access_logs` on the
+  dev DB, which shows the default (empty) privilege set, i.e. the `diary` role can still
+  `UPDATE`/`DELETE` the table directly. Chosen over DB-level enforcement (e.g. revoking
+  `UPDATE`/`DELETE` from the app's role) because that needs a privilege-separated DB role, which
+  the current single-role docker-compose setup doesn't have; adding one is a reasonable next
+  step but out of scope for this timebox. This requirement doesn't apply to `shares`: that table
+  is intentionally mutable (revoking a share is an `UPDATE` of `revoked_at`).
 
 ## Requirements
 
@@ -62,7 +85,7 @@ Time spent: **TODO**
 | O.Pass_1 | | |
 | O.Log_1 | | |
 | O.Log_2 | | |
-| O.Log_3 | | |
+| O.Log_3 | Yes | App-level only: no code path updates/deletes `access_logs` rows. No DB-level enforcement (no `REVOKE`, no trigger) — see "Data model decisions" for why. |
 | O.Log_4 | Yes | Was violated: request-logging middleware (`backend/app/main.py`, `log_requests`) logged the full request body, leaking `mood`/`symptoms`/`note`. Fixed by removing the body read and the `body=%s` log field. |
 | O.Mon_1 | | |
 | O.Err_1 | | |
