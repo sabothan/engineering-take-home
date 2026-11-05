@@ -5,9 +5,9 @@ Date: 2026-11-05
 Start: 12:33
 Pause: 12:42 - 13:04: _Caused by setup problems on my side_.
 
-End: **TODO**
+End: 15:19
 
-Time spent: **TODO**
+Time spent (total): 2h 22min
 
 ## Assumptions and open questions
 
