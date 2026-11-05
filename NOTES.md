@@ -1,8 +1,11 @@
 # Notes
 
-Start: 2026-11-05 12:33
+Date: 2026-11-05
 
-End: 2026-11-05 **TODO**
+Start: 12:33
+Pause: 12:42 - ...: _Caused by setup problems on my side_.
+
+End: **TODO**
 
 Time spent: **TODO**
 
