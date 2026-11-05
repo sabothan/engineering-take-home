@@ -53,6 +53,13 @@ class ShareOut(BaseModel):
     revoked_at: datetime | None
 
 
+class AccessLogOut(BaseModel):
+    clinician_id: int
+    clinician_name: str
+    accessed_at: datetime
+    entry_ids: list[int]
+
+
 class TelemetryEvent(BaseModel):
     event: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
 
