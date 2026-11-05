@@ -4,6 +4,3 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
-
-# exclude personal files
-agent-log.md
