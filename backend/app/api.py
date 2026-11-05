@@ -70,6 +70,19 @@ def create_entry(body: EntryIn, user: PatientUser, db: Db) -> DiaryEntry:
 
 @router.post("/shares", response_model=ShareOut, status_code=201)
 def create_share(body: ShareIn, user: PatientUser, db: Db) -> Share:
+    """Grants a clinician consent to read the caller's diary for a date range (O.Cons_1).
+
+    Args:
+        body: The clinician, date range and whether to include notes.
+        user: The authenticated patient.
+        db: Database session.
+
+    Returns:
+        The created share.
+
+    Raises:
+        HTTPException: 422, if ``clinician_id`` doesn't exist.
+    """
     if db.get(Clinician, body.clinician_id) is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown clinician_id")
     share = Share(patient_id=user.id, **body.model_dump())
@@ -81,12 +94,21 @@ def create_share(body: ShareIn, user: PatientUser, db: Db) -> Share:
 
 @router.get("/shares", response_model=list[ShareOut])
 def list_shares(user: PatientUser, db: Db) -> Sequence[Share]:
+    """Lists the caller's shares, newest first."""
     query = select(Share).where(Share.patient_id == user.id).order_by(Share.created_at.desc())
     return db.scalars(query).all()
 
 
 @router.post("/shares/{share_id}/revoke", response_model=ShareOut)
 def revoke_share(share_id: int, user: PatientUser, db: Db) -> Share:
+    """Withdraws consent for a share, effective immediately for any later read (O.Cons_2).
+
+    Idempotent: revoking an already-revoked share just returns its current state.
+
+    Raises:
+        HTTPException: 404, if the share doesn't exist or belongs to another patient (the two
+            are deliberately indistinguishable).
+    """
     share = db.scalar(select(Share).where(Share.id == share_id, Share.patient_id == user.id))
     if share is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Share not found")
@@ -99,6 +121,7 @@ def revoke_share(share_id: int, user: PatientUser, db: Db) -> Share:
 
 @router.get("/access-log", response_model=list[AccessLogOut])
 def list_access_log(user: PatientUser, db: Db) -> list[dict[str, object]]:
+    """Lists who has read the caller's diary, newest first (O.Log_2)."""
     query = (
         select(AccessLog, Clinician.name)
         .join(Clinician, Clinician.id == AccessLog.clinician_id)
@@ -120,6 +143,24 @@ def list_access_log(user: PatientUser, db: Db) -> list[dict[str, object]]:
 def list_patient_entries_for_clinician(
     patient_id: int, user: ClinicianUser, db: Db
 ) -> list[dict[str, object]]:
+    """Returns exactly the entries the caller's active shares for this patient cover.
+
+    Records the access (O.Log_1) and fails closed (503) if that recording fails, rather than
+    disclosing health data that couldn't be proven audited (O.Mon_1).
+
+    Args:
+        patient_id: The patient whose diary is being read.
+        user: The authenticated clinician.
+        db: Database session.
+
+    Returns:
+        Visible entries, newest first, with ``note`` nulled out unless a covering share
+        includes notes. Empty whether the patient doesn't exist, was never shared with, or
+        revoked the share: those cases must be indistinguishable to the clinician.
+
+    Raises:
+        HTTPException: 503, if the access could not be recorded.
+    """
     shares = db.scalars(
         select(Share).where(
             Share.patient_id == patient_id,

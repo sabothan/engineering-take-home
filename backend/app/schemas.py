@@ -29,6 +29,8 @@ class ClinicianOut(BaseModel):
 
 
 class ShareIn(BaseModel):
+    """Request body for ``POST /shares``."""
+
     clinician_id: int
     from_date: date
     to_date: date
@@ -36,12 +38,19 @@ class ShareIn(BaseModel):
 
     @model_validator(mode="after")
     def check_date_range(self) -> "ShareIn":
+        """Rejects an inverted range with a 422 instead of a DB CheckConstraint/500.
+
+        Raises:
+            ValueError: If ``to_date`` is before ``from_date``.
+        """
         if self.to_date < self.from_date:
             raise ValueError("to_date must not be before from_date")
         return self
 
 
 class ShareOut(BaseModel):
+    """Response body for ``POST /shares``, ``GET /shares`` and the revoke endpoint."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -54,6 +63,8 @@ class ShareOut(BaseModel):
 
 
 class AccessLogOut(BaseModel):
+    """Response body for ``GET /access-log``."""
+
     clinician_id: int
     clinician_name: str
     accessed_at: datetime

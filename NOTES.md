@@ -217,4 +217,21 @@ Tools, workflow, and where you corrected the agent. Session transcripts are welc
   "Assumptions and open questions"). Lesson applied going forward: re-stamp every DB in the same
   step as renaming an already-applied revision.
 
+- **Flutter (`app/lib/access_log_screen.dart`, `sharing_screen.dart`, `share_screen.dart`, and
+  the sharing-related additions to `models.dart`/`api.dart`/`widgets.dart`/`diary_screen.dart`):
+  I did not manually review this code line by line — it was generated in one pass and I ran out
+  of time (overtime already, past the 2h mark excluding the setup pause) to go through it the
+  way I did for the backend. I did verify behaviour, not just read code: `flutter analyze` and
+  `flutter test` both pass (including new widget tests), and I clicked through the actual app in
+  the browser (share creation with the consent-review step, revoke, empty/non-empty access log).
+  Two real bugs surfaced only through that testing, not from reading the diff (a `setState`
+  callback that returned a `Future` from an assignment-expression arrow closure, and a test
+  fixture encoding bug) — both were root-caused and fixed, with the fixes verified by rerunning
+  the tests. But I cannot personally vouch for this code the way I can for the backend, where I
+  reviewed and reasoned through each step before accepting it. **Please treat
+  `app/lib/*sharing*`, `app/lib/access_log_screen.dart`, and the sharing-related diffs to
+  `models.dart`/`api.dart`/`widgets.dart`/`diary_screen.dart` as unreviewed by me, and exclude
+  them when assessing how well I can explain my own submission** — ask me about the backend
+  instead, which I did go through properly.
+
 ## Next steps

@@ -19,6 +19,17 @@ app.include_router(router)
 async def log_requests(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
+    """Records request metrics and logs method/path/status/duration only.
+
+    Deliberately excludes the request body: it may contain health data (O.Log_4).
+
+    Args:
+        request: The incoming request.
+        call_next: Dispatches to the next middleware/handler.
+
+    Returns:
+        The downstream response, unmodified.
+    """
     started = time.perf_counter()
     response = await call_next(request)
     route = request.scope["route"].path if "route" in request.scope else "unmatched"
