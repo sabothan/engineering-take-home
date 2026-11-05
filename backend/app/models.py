@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -55,3 +55,18 @@ class Share(Base):
     consent_version: Mapped[str] = mapped_column(String(32), server_default="v1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class AccessLog(Base):
+    """Audit evidence that a clinician read a patient's diary (O.Log_1-3). Rows are written once
+    and never updated or deleted; no code path in this app issues UPDATE/DELETE against it."""
+
+    __tablename__ = "access_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    clinician_id: Mapped[int] = mapped_column(ForeignKey("clinicians.id"))
+    accessed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    entry_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=list)
